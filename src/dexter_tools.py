@@ -10,11 +10,20 @@ Tools ported from Dexter TypeScript:
 - get_income_statements
 - get_balance_sheets  
 - get_cash_flow_statements
-- get_stock_prices
+- get_stock_prices (historical)
+- get_stock_snapshot (current price)
 - get_insider_trades
 - screen_stocks
 - get_analyst_estimates
 - get_filings
+
+CORRECTED ENDPOINTS (from Dexter source code):
+- /prices/snapshot/ (current stock price)
+- /prices/ (historical prices)
+- /filings/items/types/ (filings)
+- /financials/income-statements (income)
+- /financials/balance-sheets (balance)
+- /financials/cash-flow-statements (cash flow)
 """
 
 import os
@@ -40,7 +49,11 @@ def _get_api_key() -> str:
     return api_key
 
 def _make_request(endpoint: str, params: Dict = None) -> Any:
-    """Make authenticated request to Financial Datasets API"""
+    """Make authenticated request to Financial Datasets API
+    
+    CRITICAL: Dexter uses 'x-api-key' header (not Authorization Bearer)
+    Source: dexter-finance/src/tools/finance/api.ts line 66
+    """
     import urllib.request
     import urllib.error
     
@@ -51,8 +64,9 @@ def _make_request(endpoint: str, params: Dict = None) -> Any:
         query = "&".join([f"{k}={v}" for k, v in params.items()])
         url = f"{url}?{query}"
     
+    # DEXTER FORMAT: Uses 'x-api-key' header (NOT Authorization Bearer)
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "x-api-key": api_key,
         "Content-Type": "application/json"
     }
     
