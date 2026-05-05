@@ -1,0 +1,9 @@
+{
+  "id": "snap_1778018159_test",
+  "label": "test",
+  "timestamp": "2026-05-05T22:55:59.155977",
+  "files_backed_up": [
+    "src/guardian_core.py"
+  ],
+  "config_backed_up": false
+}

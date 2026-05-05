@@ -1,0 +1,25 @@
+# Trading Guardian Config Template
+# Copy to config.yaml and fill in credentials
+
+alpaca:
+  api_key: "YOUR_API_KEY"
+  api_secret: "YOUR_API_SECRET"
+  base_url: "https://paper-api.alpaca.markets"
+  paper: true
+
+guardian:
+  max_risk_per_trade: 0.01  # 1%
+  max_daily_loss: 0.05      # 5%
+  validation_enabled: true
+  auto_rollback: true
+  health_check_interval: 60  # seconds
+
+autoresearch:
+  enabled: true
+  experiment_interval: 3600  # 1h
+  max_experiments: 10
+  karpathy_loop: true
+
+logging:
+  level: "INFO"
+  file: "logs/guardian.log"
