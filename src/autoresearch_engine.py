@@ -10,16 +10,46 @@ Protocol:
 4. EVALUATE - Measure results against baseline
 5. DECIDE - KEEP (merge) or REVERT (discard)
 6. REPEAT - Continuous improvement loop
+
+INTEGRATED WITH DEXTER TOOLS:
+- Uses Dexter-style financial tools (Python port)
+- LLM analysis via smart-router/litellm ONLY (NO Claude/OpenAI direct)
+- Financial Datasets API for market data
 """
 
 import json
 import time
-import subprocess
 import os
+import sys
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 import logging
+
+logger = logging.getLogger(__name__)
+
+# Add project src to path for imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Import Dexter tools (Python port)
+try:
+    from dexter_tools import (
+        get_stock_prices,
+        get_income_statements,
+        get_balance_sheets,
+        get_cash_flow_statements,
+        get_insider_trades,
+        get_analyst_estimates,
+        screen_stocks,
+        get_all_financials,
+        dexter_analysis,
+        analyze_with_llm
+    )
+    DEXTER_TOOLS_AVAILABLE = True
+    logger.info("✅ Dexter Tools loaded successfully")
+except ImportError as e:
+    logger.warning(f"⚠️  Dexter Tools not available: {e}")
+    DEXTER_TOOLS_AVAILABLE = False
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -260,12 +290,25 @@ class AutoResearchEngine:
     def run_cycle(self) -> Dict:
         """
         Run one complete AutoResearch cycle - Phases 1-6
+        NOW INTEGRATED WITH DEXTER TOOLS + SMART-ROUTER
         """
-        logger.info("=== AUTO-RESEARCH CYCLE START ===")
+        logger.info("=== AUTO-RESEARCH CYCLE START (Dexter Integrated) ===")
         
         # Phase 1: Analyze
         state = self.get_system_state()
         logger.info(f"System State: Health={state['health_score']}")
+        
+        # NEW: Dexter-style financial analysis (if tools available)
+        if DEXTER_TOOLS_AVAILABLE:
+            logger.info("🔍 Running Dexter-style financial analysis...")
+            try:
+                # Analyze a sample ticker for market insights
+                dexter_result = dexter_analysis("AAPL", "What is the current financial health and trend?")
+                state["dexter_analysis"] = dexter_result
+                logger.info(f"✅ Dexter analysis complete: {dexter_result.get('status')}")
+            except Exception as e:
+                logger.warning(f"⚠️  Dexter analysis failed: {e}")
+                state["dexter_analysis"] = {"status": "error", "error": str(e)}
         
         # Phase 2: Hypothesize
         exp = self.generate_hypothesis(state)
@@ -294,8 +337,101 @@ class AutoResearchEngine:
             "hypothesis": exp.hypothesis,
             "decision": decision,
             "health_before": state["health_score"],
-            "health_after": state["health_score"] + exp.experiment_metrics.get("health_score_improvement", 0)
+            "health_after": state["health_score"] + exp.experiment_metrics.get("health_score_improvement", 0),
+            "dexter_integrated": DEXTER_TOOLS_AVAILABLE,
+            "dexter_analysis_status": state.get("dexter_analysis", {}).get("status", "not run")
         }
+    
+    # ─── NEW: DEXTER TOOLS INTEGRATION ─────────────────────────
+    
+    def analyze_trading_opportunity(self, ticker: str, question: str) -> Dict:
+        """
+        Analyze a trading opportunity using Dexter Tools + smart-router
+        
+        CRITICAL: Uses ONLY smart-router/litellm - NO Claude/OpenAI direct!
+        """
+        if not DEXTER_TOOLS_AVAILABLE:
+            return {
+                "ticker": ticker,
+                "status": "error",
+                "error": "Dexter Tools not available. Install dependencies and set FINANCIAL_DATASETS_API_KEY"
+            }
+        
+        logger.info(f"🧠 Analyzing trading opportunity: {ticker}")
+        
+        try:
+            # Use Dexter tools + smart-router for analysis
+            result = dexter_analysis(ticker, question)
+            
+            # Add Trading Guardian context
+            result["guardian_context"] = {
+                "health_score": self._calculate_health_score(),
+                "failure_points": self._detect_failure_points(),
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Trading analysis failed: {e}")
+            return {
+                "ticker": ticker,
+                "status": "error",
+                "error": str(e)
+            }
+    
+    def screen_market_opportunities(self, criteria: Dict) -> Dict:
+        """
+        Screen for market opportunities using Dexter Tools
+        
+        Example criteria:
+        {
+            "market_cap": ">1000000000",  # > $1B
+            "sector": "Technology",
+            "price_to_earnings": "<20"
+        }
+        """
+        if not DEXTER_TOOLS_AVAILABLE:
+            return {
+                "status": "error",
+                "error": "Dexter Tools not available"
+            }
+        
+        logger.info(f"🔍 Screening market with criteria: {criteria}")
+        
+        try:
+            # Use Dexter's screen_stocks function
+            result = screen_stocks(criteria)
+            
+            # Use LLM (smart-router ONLY) to analyze results
+            if result.get("status") == "success" and result.get("results"):
+                prompt = f"""
+Analyze these stock screening results and identify the top 3 opportunities:
+
+CRITERIA: {json.dumps(criteria, indent=2)}
+
+RESULTS: {json.dumps(result.get("results", [])[:10], indent=2)}
+
+TASK:
+1. Rank top 3 opportunities with reasoning
+2. Identify key risks for each
+3. Suggest position sizing (1-10 scale)
+4. Provide entry/exit strategy
+
+Be concise but data-driven.
+"""
+                
+                llm_analysis = analyze_with_llm(prompt)
+                result["llm_analysis"] = llm_analysis
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Market screening failed: {e}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
 
 
 if __name__ == "__main__":
