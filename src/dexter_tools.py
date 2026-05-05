@@ -36,6 +36,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Base URL for Financial Datasets API
+# CORRECTED: No /api prefix (verified working endpoints)
 BASE_URL = "https://api.financialdatasets.ai"
 
 def _get_api_key() -> str:
@@ -49,33 +50,30 @@ def _get_api_key() -> str:
     return api_key
 
 def _make_request(endpoint: str, params: Dict = None) -> Any:
-    """Make authenticated request to Financial Datasets API
+    """
+    Make authenticated request to Financial Datasets API
     
     CRITICAL: Dexter uses 'x-api-key' header (not Authorization Bearer)
     Source: dexter-finance/src/tools/finance/api.ts line 66
+    
+    Updated: Uses 'requests' library for reliable HTTP handling
     """
-    import urllib.request
-    import urllib.error
+    import requests
     
     api_key = _get_api_key()
     url = f"{BASE_URL}{endpoint}"
     
-    if params:
-        query = "&".join([f"{k}={v}" for k, v in params.items()])
-        url = f"{url}?{query}"
-    
-    # DEXTER FORMAT: Uses 'x-api-key' header (NOT Authorization Bearer)
     headers = {
         "x-api-key": api_key,
         "Content-Type": "application/json"
     }
     
     try:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=30) as response:
-            return json.loads(response.read().decode())
-    except urllib.error.HTTPError as e:
-        logger.error(f"HTTP Error {e.code}: {e.reason} for {url}")
+        response = requests.get(url, params=params, headers=headers, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTP Error {e.response.status_code}: {e.response.reason} for {url}")
         raise
     except Exception as e:
         logger.error(f"Request failed: {e}")
@@ -102,7 +100,7 @@ def get_income_statements(ticker: str, period: str = "annual", limit: int = 5) -
     }
     
     try:
-        result = _make_request("/api/financials/income-statements", params)
+        result = _make_request("/financials/income-statements", params)
         logger.info(f"Retrieved {limit} {period} income statements for {ticker}")
         return {
             "ticker": ticker,
@@ -125,7 +123,7 @@ def get_balance_sheets(ticker: str, period: str = "annual", limit: int = 5) -> D
     }
     
     try:
-        result = _make_request("/api/financials/balance-sheets", params)
+        result = _make_request("/financials/balance-sheets", params)
         logger.info(f"Retrieved {limit} {period} balance sheets for {ticker}")
         return {
             "ticker": ticker,
@@ -148,7 +146,7 @@ def get_cash_flow_statements(ticker: str, period: str = "annual", limit: int = 5
     }
     
     try:
-        result = _make_request("/api/financials/cash-flow-statements", params)
+        result = _make_request("/financials/cash-flow-statements", params)
         logger.info(f"Retrieved {limit} {period} cash flow statements for {ticker}")
         return {
             "ticker": ticker,
@@ -160,7 +158,37 @@ def get_cash_flow_statements(ticker: str, period: str = "annual", limit: int = 5
         logger.error(f"Failed to get cash flow statements for {ticker}: {e}")
         return {"ticker": ticker, "status": "error", "error": str(e)}
 
-# ─── STOCK PRICES ────────────────────────────────────────────
+# ─── STOCK SNAPSHOT (Current Price) ────────────────────────
+
+def get_stock_snapshot(ticker: str) -> Dict:
+    """
+    Get current stock price snapshot.
+    
+    Args:
+        ticker: Stock ticker (e.g., 'AAPL')
+    
+    Returns:
+        Dict with current price, change, and timestamp
+    """
+    params = {"ticker": ticker}
+    
+    try:
+        result = _make_request("/prices/snapshot/", params)
+        snapshot = result.get("snapshot", {})
+        logger.info(f"Retrieved snapshot for {ticker}: ${snapshot.get('price', 0)}")
+        return {
+            "ticker": ticker,
+            "price": snapshot.get("price"),
+            "day_change": snapshot.get("day_change"),
+            "day_change_percent": snapshot.get("day_change_percent"),
+            "time": snapshot.get("time"),
+            "status": "success"
+        }
+    except Exception as e:
+        logger.error(f"Failed to get snapshot for {ticker}: {e}")
+        return {"ticker": ticker, "status": "error", "error": str(e)}
+
+# ─── STOCK PRICES (Historical) ────────────────────────────────────
 
 def get_stock_prices(ticker: str, interval: str = "1d", limit: int = 30) -> Dict:
     """
@@ -178,7 +206,7 @@ def get_stock_prices(ticker: str, interval: str = "1d", limit: int = 30) -> Dict
     }
     
     try:
-        result = _make_request("/api/prices", params)
+        result = _make_request("/prices", params)
         logger.info(f"Retrieved {limit} {interval} prices for {ticker}")
         return {
             "ticker": ticker,
@@ -206,7 +234,7 @@ def get_insider_trades(ticker: str, limit: int = 10) -> Dict:
     }
     
     try:
-        result = _make_request("/api/insider-trades", params)
+        result = _make_request("/insider-trades", params)
         logger.info(f"Retrieved {limit} insider trades for {ticker}")
         return {
             "ticker": ticker,
@@ -224,7 +252,7 @@ def get_analyst_estimates(ticker: str) -> Dict:
     params = {"ticker": ticker}
     
     try:
-        result = _make_request("/api/analyst-estimates", params)
+        result = _make_request("/analyst-estimates", params)
         logger.info(f"Retrieved analyst estimates for {ticker}")
         return {
             "ticker": ticker,
@@ -249,7 +277,7 @@ def screen_stocks(criteria: Dict) -> Dict:
     }
     """
     try:
-        result = _make_request("/api/screen", criteria)
+        result = _make_request("/screen", criteria)
         logger.info(f"Screened stocks with criteria: {criteria}")
         return {
             "criteria": criteria,
