@@ -234,20 +234,30 @@ class TradingGuardian:
         if not self._dual_mode_enabled:
             return self.alpaca_executor_paper  # Fallback to paper only
         
-        # Check if strategy is proven via autoresearch
+        # Check if strategy is proven via autoresearch experiments file
         try:
-            experiments = self.autoresearch.get_experiments(strategy_name)
-            if experiments and len(experiments) > 0:
-                latest = experiments[-1]
-                sharpe = latest.get('sharpe_ratio', 0)
-                drawdown = latest.get('max_drawdown_pct', 100)
-                
-                # Proven strategy criteria
-                if sharpe > 2.0 and drawdown < 5.0:
-                    live_exec = self.alpaca_executor_live
-                    if live_exec:
-                        logger.info(f"📈 Strategy '{strategy_name}' → LIVE (Sharpe: {sharpe:.2f})")
-                        return live_exec
+            import os, json
+            experiments_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'experiments.jsonl')
+            experiments_file = os.path.abspath(experiments_file)
+            
+            if os.path.exists(experiments_file):
+                with open(experiments_file, 'r') as f:
+                    for line in f:
+                        try:
+                            exp = json.loads(line.strip())
+                            exp_strategy = exp.get('strategy_name', exp.get('strategy', ''))
+                            if exp_strategy == strategy_name:
+                                sharpe = exp.get('sharpe_ratio', 0)
+                                drawdown = exp.get('max_drawdown_pct', exp.get('max_drawdown', 100))
+                                
+                                # Proven strategy criteria
+                                if sharpe > 2.0 and drawdown < 5.0:
+                                    live_exec = self.alpaca_executor_live
+                                    if live_exec:
+                                        logger.info(f"📈 Strategy '{strategy_name}' → LIVE (Sharpe: {sharpe:.2f})")
+                                        return live_exec
+                        except json.JSONDecodeError:
+                            continue
         except Exception as e:
             logger.warning(f"Strategy routing check failed: {e}")
         
