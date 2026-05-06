@@ -59,16 +59,27 @@ def main():
         logger.error(f"❌ Failed to initialize Guardian: {e}")
         return
     
-    # Initialize Alpaca Executor (triggers lazy load)
+    # Initialize Alpaca Executors (Paper + Live dual mode)
     try:
-        _ = guardian.alpaca_executor
-        account = guardian.alpaca_executor.get_account()
-        if account:
-            logger.info(f"💰 Account Balance: ${float(account.get('cash', 0)):.2f}")
-            logger.info(f"📊 Buying Power: ${float(account.get('buying_power', 0)):.2f}")
+        _ = guardian.alpaca_executor_paper
+        account_paper = guardian.alpaca_executor_paper.get_account()
+        if account_paper:
+            logger.info(f"💰 Paper Account: ${float(account_paper.get('cash', 0)):.2f}")
+            logger.info(f"📊 Paper Buying Power: ${float(account_paper.get('buying_power', 0)):.2f}")
     except Exception as e:
-        logger.error(f"❌ Failed to connect to Alpaca: {e}")
+        logger.error(f"❌ Failed to connect to Alpaca Paper: {e}")
         return
+    
+    # Try Live account (optional - may not have credentials)
+    try:
+        live_exec = guardian.alpaca_executor_live
+        if live_exec:
+            account_live = live_exec.get_account()
+            if account_live:
+                logger.info(f"💰 LIVE Account: ${float(account_live.get('cash', 0)):.2f}")
+                logger.info(f"📊 LIVE Buying Power: ${float(account_live.get('buying_power', 0)):.2f}")
+    except Exception as e:
+        logger.warning(f"⚠️  Live account unavailable: {e}")
     
     cycle_count = 0
     check_interval = 300  # 5 minutes
@@ -111,11 +122,12 @@ def main():
                     
                     logger.info(f"   📈 Processing {symbol} (qty={qty:.4f})...")
                     
-                    success, msg = guardian.execute_real_trade(signal)
+                    success, msg, details = guardian.execute_real_trade(signal)
                     
                     if success:
                         executed += 1
-                        logger.info(f"      ✅ Trade executed: {msg}")
+                        mode = details.get('mode', 'PAPER')
+                        logger.info(f"      ✅ Trade executed: {msg} [{mode}]")
                     else:
                         failed += 1
                         logger.error(f"      ❌ Trade failed: {msg}")
@@ -123,16 +135,31 @@ def main():
                 logger.info(f"   📊 Results: {executed} executed, {failed} failed")
             
             # ========== PHASE 4: SHOW CURRENT POSITIONS ==========
+            # Paper positions
             try:
-                positions = guardian.alpaca_executor.get_positions()
-                if positions:
-                    logger.info(f"   📊 Current positions: {len(positions)}")
-                    for sym, data in positions.items():
-                        logger.info(f"      {sym}: {data['qty']} shares @ ${data['current']:.2f} (PnL: ${data['pnl']:.2f})")
+                positions_paper = guardian.alpaca_executor_paper.get_positions()
+                if positions_paper:
+                    logger.info(f"   📊 Paper Positions: {len(positions_paper)}")
+                    for sym, data in positions_paper.items():
+                        logger.info(f"      {sym}: {data['qty']} shares @ ${data['current']:.2f} (PnL: ${data['pnl']:.2f}) [PAPER]")
                 else:
-                    logger.info("   📊 No open positions")
+                    logger.info("   📊 No Paper positions")
             except Exception as e:
-                logger.warning(f"   ⚠️  Could not fetch positions: {e}")
+                logger.warning(f"   ⚠️  Could not fetch Paper positions: {e}")
+            
+            # Live positions (if available)
+            try:
+                live_exec = guardian.alpaca_executor_live
+                if live_exec:
+                    positions_live = live_exec.get_positions()
+                    if positions_live:
+                        logger.info(f"   📊 Live Positions: {len(positions_live)}")
+                        for sym, data in positions_live.items():
+                            logger.info(f"      {sym}: {data['qty']} shares @ ${data['current']:.2f} (PnL: ${data['pnl']:.2f}) [LIVE]")
+                    else:
+                        logger.info("   📊 No Live positions")
+            except Exception as e:
+                logger.warning(f"   ⚠️  Could not fetch Live positions: {e}")
             
             # ========== PHASE 5: AUTORESEARCH (Hourly) ==========
             if cycle_count % 12 == 0:  # Every 12 cycles = 1 hour

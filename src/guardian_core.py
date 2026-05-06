@@ -97,7 +97,9 @@ class TradingGuardian:
         self._monitor = None
         self._autoresearch = None
         self._strategy_engine = None
-        self._alpaca_executor = None
+        self._alpaca_executor_paper = None  # Paper trading (testing)
+        self._alpaca_executor_live = None   # Live trading (proven strategies)
+        self._dual_mode_enabled = True  # Enable both Paper + Live simultaneously
         
         # Credentials check (FP1 fix)
         self.credentials_ok = self._check_credentials()
@@ -202,13 +204,56 @@ class TradingGuardian:
         return self._strategy_engine
     
     @property
-    def alpaca_executor(self):
-        """Lazy load Alpaca Executor for real trades"""
-        if self._alpaca_executor is None:
+    def alpaca_executor_paper(self):
+        """Lazy load Alpaca Executor for Paper Trading (testing, no risk)"""
+        if self._alpaca_executor_paper is None:
             from alpaca_executor import AlpacaExecutor
-            self._alpaca_executor = AlpacaExecutor(use_live=False)  # Paper trading
-            logger.info("✅ AlpacaExecutor initialized (Paper Trading)")
-        return self._alpaca_executor
+            self._alpaca_executor_paper = AlpacaExecutor(use_live=False)
+            logger.info("✅ AlpacaExecutor Paper Trading initialized")
+        return self._alpaca_executor_paper
+    
+    @property
+    def alpaca_executor_live(self):
+        """Lazy load Alpaca Executor for Live Trading (proven strategies only)"""
+        if self._alpaca_executor_live is None:
+            try:
+                from alpaca_executor import AlpacaExecutor
+                self._alpaca_executor_live = AlpacaExecutor(use_live=True)
+                logger.info("✅ AlpacaExecutor Live Trading initialized")
+            except Exception as e:
+                logger.warning(f"⚠️ Live trading unavailable: {e}")
+                return None
+        return self._alpaca_executor_live
+    
+    def _get_executor_for_strategy(self, strategy_name: str):
+        """
+        Smart routing: Choose Paper or Live based on strategy performance
+        - Paper: New strategies, backtesting, unproven
+        - Live: Proven strategies (Sharpe > 2.0, drawdown < 5%)
+        """
+        if not self._dual_mode_enabled:
+            return self.alpaca_executor_paper  # Fallback to paper only
+        
+        # Check if strategy is proven via autoresearch
+        try:
+            experiments = self.autoresearch.get_experiments(strategy_name)
+            if experiments and len(experiments) > 0:
+                latest = experiments[-1]
+                sharpe = latest.get('sharpe_ratio', 0)
+                drawdown = latest.get('max_drawdown_pct', 100)
+                
+                # Proven strategy criteria
+                if sharpe > 2.0 and drawdown < 5.0:
+                    live_exec = self.alpaca_executor_live
+                    if live_exec:
+                        logger.info(f"📈 Strategy '{strategy_name}' → LIVE (Sharpe: {sharpe:.2f})")
+                        return live_exec
+        except Exception as e:
+            logger.warning(f"Strategy routing check failed: {e}")
+        
+        # Default: Paper trading (safe)
+        logger.info(f"📄 Strategy '{strategy_name}' → PAPER (testing/unproven)")
+        return self.alpaca_executor_paper
     
     def _init_strategies(self):
         """Initialize and register all trading strategies"""
@@ -282,11 +327,15 @@ class TradingGuardian:
     
     def _execute_real_order(self, order: TradeOrder) -> Dict:
         """
-        Execute order via AlpacaExecutor (REAL execution)
+        Execute order via smart routing (Paper or Live based on strategy performance)
         """
         try:
-            # Get executor
-            executor = self.alpaca_executor
+            # Smart routing: Paper for testing, Live for proven strategies
+            executor = self._get_executor_for_strategy(order.strategy)
+            
+            # Log which mode we're using
+            mode = "LIVE" if executor == self._alpaca_executor_live else "PAPER"
+            logger.info(f"📊 Executing via {mode}: {order.side} {order.quantity} {order.symbol}")
             
             # Submit order
             result = executor.submit_order(
@@ -299,6 +348,10 @@ class TradingGuardian:
             if result:
                 filled_price = result.get("filled_avg_price")
                 filled_qty = result.get("filled_qty")
+                
+                # Determine mode for reporting
+                mode = "LIVE" if executor == self._alpaca_executor_live else "PAPER"
+                
                 return {
                     "success": True,
                     "order_id": result.get("id"),
@@ -306,7 +359,8 @@ class TradingGuardian:
                     "filled_price": float(filled_price) if filled_price is not None else 0.0,
                     "filled_qty": float(filled_qty) if filled_qty is not None else 0.0,
                     "status": result.get("status"),
-                    "strategy": order.strategy
+                    "strategy": order.strategy,
+                    "mode": mode  # PAPER or LIVE
                 }
             else:
                 return {
@@ -321,11 +375,11 @@ class TradingGuardian:
                 "error": str(e)
             }
     
-    def execute_real_trade(self, signal: Dict) -> Tuple[bool, str]:
+    def execute_real_trade(self, signal: Dict) -> Tuple[bool, str, Dict]:
         """
         Execute a trade from a strategy signal
         signal: Dict with keys: symbol, qty, side, strategy_name, confidence
-        Returns: (success, message)
+        Returns: (success, message, details_dict)
         """
         order = TradeOrder(
             symbol=signal["symbol"],
@@ -337,7 +391,7 @@ class TradingGuardian:
         )
         
         success, msg, details = self.execute_trade(order)
-        return success, msg
+        return success, msg, details
     
     def aggregate_signals(self) -> List[Dict]:
         """
