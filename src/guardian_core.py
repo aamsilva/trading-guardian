@@ -404,7 +404,7 @@ class TradingGuardian:
             prices = {}
             
             # Get current positions
-            positions = self.alpaca_executor.get_positions()
+            positions = self.alpaca_executor_paper.get_positions()
             if positions:
                 for symbol, data in positions.items():
                     qty = data.get('qty', 0)
@@ -416,7 +416,7 @@ class TradingGuardian:
             default_symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]
             for sym in default_symbols:
                 if sym not in prices:
-                    current_price = self.alpaca_executor.get_current_price(sym)
+                    current_price = self.alpaca_executor_paper.get_current_price(sym)
                     if current_price:
                         prices[sym] = {"qty": 0, "current": current_price}
             
@@ -436,12 +436,12 @@ class TradingGuardian:
                 if agg["buy_votes"] > agg["sell_votes"]:
                     # Calculate quantity based on confidence and account balance
                     try:
-                        account = self.alpaca_executor.get_account()
+                        account = self.alpaca_executor_paper.get_account()
                         if account:
                             cash = float(account.get("cash", 0))
                             # Risk 2% of cash per trade
                             max_trade_value = cash * 0.02
-                            current_price = self.alpaca_executor.get_current_price(symbol)
+                            current_price = self.alpaca_executor_paper.get_current_price(symbol)
                             if current_price and current_price > 0:
                                 qty = round(max_trade_value / current_price, 4)
                                 if qty > 0:
