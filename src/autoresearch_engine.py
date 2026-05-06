@@ -21,10 +21,18 @@ import json
 import time
 import os
 import sys
+import subprocess
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 import logging
+
+# Load .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv("/Volumes/disco1tb/projects/trading-guardian/.env")
+except ImportError:
+    pass
 
 logger = logging.getLogger(__name__)
 

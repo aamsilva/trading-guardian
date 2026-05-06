@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.trading.guardian.daemon</string>
+    
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Volumes/disco1tb/projects/trading-guardian/src/guardian_daemon.py</string>
+    </array>
+    
+    <key>WorkingDirectory</key>
+    <string>/Volumes/disco1tb/projects/trading-guardian</string>
+    
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+    
+    <key>StandardOutPath</key>
+    <string>/Volumes/disco1tb/projects/trading-guardian/logs/daemon_stdout.log</string>
+    
+    <key>StandardErrorPath</key>
+    <string>/Volumes/disco1tb/projects/trading-guardian/logs/daemon_stderr.log</string>
+    
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONPATH</key>
+        <string>/Volumes/disco1tb/projects/trading-guardian/src</string>
+    </dict>
+    
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    
+    <key>StartInterval</key>
+    <integer>0</integer>
+</dict>
+</plist>

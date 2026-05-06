@@ -33,6 +33,13 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 import logging
 
+# Load .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv("/Volumes/disco1tb/projects/trading-guardian/.env")
+except ImportError:
+    pass
+
 logger = logging.getLogger(__name__)
 
 # Base URL for Financial Datasets API
@@ -190,7 +197,7 @@ def get_stock_snapshot(ticker: str) -> Dict:
 
 # ─── STOCK PRICES (Historical) ────────────────────────────────────
 
-def get_stock_prices(ticker: str, interval: str = "1d", limit: int = 30) -> Dict:
+def get_stock_prices(ticker: str, start_date: str = None, interval: str = "1d", limit: int = 30) -> Dict:
     """
     Get historical stock prices.
     

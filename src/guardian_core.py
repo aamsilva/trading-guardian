@@ -47,6 +47,7 @@ class TradeOrder:
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
     strategy: str = "default"
+    confidence: float = 0.5  # default confidence
     
     def validate(self) -> Tuple[bool, str]:
         """Validate order parameters"""
@@ -95,9 +96,14 @@ class TradingGuardian:
         self._rollback = None
         self._monitor = None
         self._autoresearch = None
+        self._strategy_engine = None
+        self._alpaca_executor = None
         
         # Credentials check (FP1 fix)
         self.credentials_ok = self._check_credentials()
+        
+        # Initialize strategy engine and register strategies
+        self._init_strategies()
         
         logger.info(f"Trading Guardian initialized | Credentials: {self.credentials_ok}")
     
@@ -129,26 +135,20 @@ class TradingGuardian:
         }
     
     def _check_credentials(self) -> bool:
-        """Check if API credentials are configured (FP1)"""
-        env_path = f"{self.project_path}/.env"
-        if not os.path.exists(env_path):
-            logger.warning("⚠️  No .env file found - create from config/.env.template")
+        """
+        Check if API credentials are configured (FP1)
+        Uses AlpacaExecutor's credential loading logic
+        """
+        try:
+            # Try to initialize AlpacaExecutor - it will load from ~/.openclaw/secrets/
+            from alpaca_executor import AlpacaExecutor
+            executor = AlpacaExecutor(use_live=False)
+            # If no exception, credentials are OK
+            logger.info("✅ Alpaca credentials verified via AlpacaExecutor")
+            return True
+        except Exception as e:
+            logger.warning(f"⚠️  Credentials check failed: {e}")
             return False
-        
-        # Check for required vars
-        required = ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY']
-        missing = []
-        with open(env_path, 'r') as f:
-            content = f.read()
-            for var in required:
-                if var not in content:
-                    missing.append(var)
-        
-        if missing:
-            logger.warning(f"⚠️  Missing credentials: {missing}")
-            return False
-        
-        return True
     
     @property
     def validator(self):
@@ -182,6 +182,42 @@ class TradingGuardian:
             self._autoresearch = AutoResearchEngine(self.project_path)
         return self._autoresearch
     
+    @property
+    def strategy_engine(self):
+        """Lazy load Strategy Engine (multi-strategy)"""
+        if self._strategy_engine is None:
+            from strategy_engine import StrategyEngine
+            from strategy_bollinger import BollingerStrategy
+            from strategy_momentum import MomentumStrategy
+            from strategy_rsi import RSIStrategy
+            from strategy_first_hour import FirstHourBreakoutStrategy
+            
+            self._strategy_engine = StrategyEngine()
+            self._strategy_engine.register_strategy('bollinger', BollingerStrategy())
+            self._strategy_engine.register_strategy('momentum', MomentumStrategy())
+            self._strategy_engine.register_strategy('rsi', RSIStrategy())
+            self._strategy_engine.register_strategy('first_hour', FirstHourBreakoutStrategy())
+            
+            logger.info(f"✅ StrategyEngine loaded with {len(self._strategy_engine.strategies)} strategies")
+        return self._strategy_engine
+    
+    @property
+    def alpaca_executor(self):
+        """Lazy load Alpaca Executor for real trades"""
+        if self._alpaca_executor is None:
+            from alpaca_executor import AlpacaExecutor
+            self._alpaca_executor = AlpacaExecutor(use_live=False)  # Paper trading
+            logger.info("✅ AlpacaExecutor initialized (Paper Trading)")
+        return self._alpaca_executor
+    
+    def _init_strategies(self):
+        """Initialize and register all trading strategies"""
+        try:
+            # This will trigger the lazy loading
+            _ = self.strategy_engine
+        except Exception as e:
+            logger.warning(f"Failed to initialize strategies: {e}")
+    
     def execute_trade(self, order: TradeOrder) -> Tuple[bool, str, Dict]:
         """
         Execute a trade with full validation and rollback
@@ -191,7 +227,7 @@ class TradingGuardian:
         self.metrics.total_trades += 1
         self.metrics.api_calls += 1
         
-        # Phase 1: Validate order
+        # Phase1: Validate order
         if self.config.get("guardian", {}).get("validation_enabled", True):
             valid, msg = self.validator.validate_order(order)
             if not valid:
@@ -199,28 +235,35 @@ class TradingGuardian:
                 logger.error(f"Validation failed: {msg}")
                 return False, f"Validation failed: {msg}", {}
         
-        # Phase 2: Check credentials
+        # Phase2: Check credentials
         if not self.credentials_ok:
             self.metrics.failed_trades += 1
             return False, "Credentials not configured", {}
         
-        # Phase 3: Pre-execution snapshot (for rollback)
+        # Phase3: Pre-execution snapshot (for rollback)
         snapshot = self.rollback.create_snapshot(f"pre_trade_{order.symbol}")
         
-        # Phase 4: Execute (simulated - no real API without credentials)
+        # Phase4: Execute REAL order via Alpaca
         try:
-            # In real implementation: call Alpaca API
-            result = self._simulate_execution(order)
+            result = self._execute_real_order(order)
             
             if result["success"]:
                 self.metrics.successful_trades += 1
                 logger.info(f"✅ Trade executed: {result}")
+                
+                # Send Discord notification immediately
+                self._notify_discord(order, result, success=True)
+                
                 return True, "Trade executed successfully", result
             else:
                 # Rollback if enabled
                 if self.config.get("guardian", {}).get("auto_rollback", True):
                     self.rollback.restore_snapshot(snapshot["id"])
                 self.metrics.failed_trades += 1
+                
+                # Send Discord notification of failure
+                self._notify_discord(order, result, success=False)
+                
                 return False, result.get("error", "Unknown error"), result
                 
         except Exception as e:
@@ -232,10 +275,164 @@ class TradingGuardian:
             if self.config.get("guardian", {}).get("auto_rollback", True):
                 self.rollback.restore_snapshot(snapshot["id"])
             
+            # Send Discord notification of error
+            self._notify_discord(order, {"error": str(e)}, success=False)
+            
             return False, f"Exception: {str(e)}", {}
     
+    def _execute_real_order(self, order: TradeOrder) -> Dict:
+        """
+        Execute order via AlpacaExecutor (REAL execution)
+        """
+        try:
+            # Get executor
+            executor = self.alpaca_executor
+            
+            # Submit order
+            result = executor.submit_order(
+                symbol=order.symbol,
+                qty=order.quantity,
+                side=order.side,
+                order_type=order.order_type
+            )
+            
+            if result:
+                filled_price = result.get("filled_avg_price")
+                filled_qty = result.get("filled_qty")
+                return {
+                    "success": True,
+                    "order_id": result.get("id"),
+                    "symbol": result.get("symbol"),
+                    "filled_price": float(filled_price) if filled_price is not None else 0.0,
+                    "filled_qty": float(filled_qty) if filled_qty is not None else 0.0,
+                    "status": result.get("status"),
+                    "strategy": order.strategy
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "Order submission failed - no result returned"
+                }
+                
+        except Exception as e:
+            logger.error(f"Real execution error: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    def execute_real_trade(self, signal: Dict) -> Tuple[bool, str]:
+        """
+        Execute a trade from a strategy signal
+        signal: Dict with keys: symbol, qty, side, strategy_name, confidence
+        Returns: (success, message)
+        """
+        order = TradeOrder(
+            symbol=signal["symbol"],
+            side=signal.get("side", "buy"),
+            quantity=signal["qty"],
+            order_type="market",
+            strategy=signal.get("strategy_name", "unknown"),
+            confidence=signal.get("confidence", 0.5)
+        )
+        
+        success, msg, details = self.execute_trade(order)
+        return success, msg
+    
+    def aggregate_signals(self) -> List[Dict]:
+        """
+        Aggregate signals from all strategies
+        Returns: List of trade signals ready for execution
+        """
+        try:
+            # Build prices dict for strategy engine
+            # Include current positions + default symbols
+            prices = {}
+            
+            # Get current positions
+            positions = self.alpaca_executor.get_positions()
+            if positions:
+                for symbol, data in positions.items():
+                    qty = data.get('qty', 0)
+                    current_price = data.get('current')
+                    if current_price:
+                        prices[symbol] = {"qty": qty, "current": current_price}
+            
+            # Add default symbols to monitor (even without positions)
+            default_symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]
+            for sym in default_symbols:
+                if sym not in prices:
+                    current_price = self.alpaca_executor.get_current_price(sym)
+                    if current_price:
+                        prices[sym] = {"qty": 0, "current": current_price}
+            
+            if not prices:
+                logger.warning("No price data available for any symbol")
+                return []
+            
+            # Get all signals from strategy engine
+            all_signals = self.strategy_engine.get_all_signals(prices)
+            
+            # Aggregate using strategy_engine's aggregation
+            aggregated = self.strategy_engine.aggregate_signals(all_signals)
+            
+            # Convert to trade signals
+            trades = []
+            for symbol, agg in aggregated.items():
+                if agg["buy_votes"] > agg["sell_votes"]:
+                    # Calculate quantity based on confidence and account balance
+                    try:
+                        account = self.alpaca_executor.get_account()
+                        if account:
+                            cash = float(account.get("cash", 0))
+                            # Risk 2% of cash per trade
+                            max_trade_value = cash * 0.02
+                            current_price = self.alpaca_executor.get_current_price(symbol)
+                            if current_price and current_price > 0:
+                                qty = round(max_trade_value / current_price, 4)
+                                if qty > 0:
+                                    trades.append({
+                                        "symbol": symbol,
+                                        "qty": qty,
+                                        "side": "buy",
+                                        "strategy_name": "aggregated",
+                                        "confidence": agg.get("confidence", 0.5),
+                                        "buy_votes": agg["buy_votes"],
+                                        "sell_votes": agg["sell_votes"]
+                                    })
+                    except Exception as e:
+                        logger.error(f"Error calculating trade size for {symbol}: {e}")
+            
+            logger.info(f"Aggregated {len(trades)} buy signals from strategies")
+            return trades
+            
+        except Exception as e:
+            logger.error(f"Signal aggregation error: {e}")
+            return []
+    
+    def _notify_discord(self, order: TradeOrder, result: Dict, success: bool):
+        """
+        Send immediate Discord notification after trade execution
+        """
+        try:
+            from discord_retry import send_trade_notification
+            
+            notification_data = {
+                "symbol": order.symbol,
+                "qty": order.quantity,
+                "price": result.get("filled_price", 0),
+                "strategy_name": order.strategy,
+                "confidence": getattr(order, "confidence", 0.5),
+                "side": order.side
+            }
+            
+            send_trade_notification(notification_data, success, result)
+            
+        except Exception as e:
+            logger.error(f"Discord notification error: {e}")
+    
     def _simulate_execution(self, order: TradeOrder) -> Dict:
-        """Simulate trade execution (replace with real API)"""
+        """Simulate trade execution (DEPRECATED - use _execute_real_order)"""
         time.sleep(0.5)  # Simulate API call
         return {
             "success": True,
