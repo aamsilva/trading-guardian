@@ -362,7 +362,7 @@ class TradingGuardian:
                 # Determine mode for reporting
                 mode = "LIVE" if executor == self._alpaca_executor_live else "PAPER"
                 
-                return {
+                result = {
                     "success": True,
                     "order_id": result.get("id"),
                     "symbol": result.get("symbol"),
@@ -372,6 +372,9 @@ class TradingGuardian:
                     "strategy": order.strategy,
                     "mode": mode  # PAPER or LIVE
                 }
+                # Log trade for reporting
+                self._log_trade_to_file(result)
+                return result
             else:
                 return {
                     "success": False,
@@ -385,6 +388,25 @@ class TradingGuardian:
                 "error": str(e)
             }
     
+    def _log_trade_to_file(self, trade_data: Dict):
+        """Append trade data to data/trades.jsonl for reporting"""
+        try:
+            import os
+            from pathlib import Path
+            # Get project root (parent of src)
+            project_root = Path(__file__).parent.parent
+            trades_file = project_root / "data" / "trades.jsonl"
+            trades_file.parent.mkdir(exist_ok=True)
+            
+            # Add timestamp and latency if not present
+            trade_data.setdefault("timestamp", datetime.now().isoformat())
+            trade_data.setdefault("latency_ms", 0.0)
+            
+            with open(trades_file, "a") as f:
+                f.write(json.dumps(trade_data) + "\n")
+        except Exception as e:
+            logger.warning(f"Failed to log trade to file: {e}")
+
     def execute_real_trade(self, signal: Dict) -> Tuple[bool, str, Dict]:
         """
         Execute a trade from a strategy signal
