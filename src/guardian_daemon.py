@@ -237,17 +237,25 @@ def main():
             except Exception as e:
                 logger.warning(f"   ⚠️  Strategy data capture failed: {e}")
             
-            # ========== PHASE 5: AUTORESEARCH (Hourly) ==========
+            # ========== PHASE 5: AUTORESEARCH + PLATFORM DISCOVERY ==========
             if cycle_count % 12 == 0:  # Every 12 cycles = 1 hour
                 logger.info("🔬 Running AutoResearch cycle...")
                 try:
                     result = guardian.run_autoresearch_cycle()
                     logger.info(f"   AutoResearch: {result}")
-                    # AutoResearch may discover new trading platforms - log it
-                    if "new_platform" in str(result).lower() or "discovered" in str(result).lower():
-                        logger.info("   🆕 New trading platform discovered via Karpathy AutoResearch!")
                 except Exception as e:
-                    logger.error(f"   AutoResearch failed: {e}")
+                    logger.error(f"   ❌ AutoResearch failed: {e}")
+            
+            # Platform Discovery every 60 cycles (5 hours)
+            if cycle_count % 60 == 0:
+                logger.info("🚀 Running Platform Discovery cycle...")
+                try:
+                    from platform_discovery import PlatformDiscovery
+                    discovery = PlatformDiscovery()
+                    result = discovery.run_discovery_cycle()
+                    logger.info(f"   Platform Discovery: {result}")
+                except Exception as e:
+                    logger.error(f"   ❌ Platform Discovery failed: {e}")
             
             # ========== CYCLE SUMMARY ==========
             cycle_time = time.time() - cycle_start
