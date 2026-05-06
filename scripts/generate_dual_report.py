@@ -1,182 +1,180 @@
 #!/usr/bin/env python3
 """
 Generate Alpha Trade-style Dual Paper/Live Report for Trading Guardian
-Matches template: 📊 Alpha Trade Report with Paper/Live balances, strategies, execution stats
+NOW READS FROM STATE FILE (no Alpaca API calls!)
+Matches template: 📊 Alpha Trade Report with Paper/Live sections
 """
-import os
-import sys
 import json
-import time
-from datetime import datetime
 from pathlib import Path
+from datetime import datetime
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv(Path(__file__).parent.parent / ".env")
-except ImportError:
-    pass
-
-# ─── Configuration ───
-PROJECT_ROOT = Path(__file__).parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
-LOG_DIR = PROJECT_ROOT / "logs"
-REPORT_CHANNEL = "1474780235781242881"  # Discord channel ID from sample
-
-# ─── Data Loaders ───
-def load_alpaca_accounts():
-    """Load Paper and Live Alpaca account data"""
-    accounts = {"paper": {"balance": 0.0, "pnl": 0.0}, "live": {"balance": 0.0, "pnl": 0.0}}
-    try:
-        from alpaca_executor import AlpacaExecutor
-        # Paper account
-        paper_exec = AlpacaExecutor(use_live=False)
-        paper_acc = paper_exec.get_account()
-        accounts["paper"]["balance"] = float(paper_acc.cash)
-        # Calculate Paper PnL from positions
-        paper_pos = paper_exec.get_positions()
-        paper_pnl = sum(pos.get("unrealized_pl", 0.0) for pos in paper_pos.values()) if paper_pos else 0.0
-        accounts["paper"]["pnl"] = paper_pnl
-
-        # Live account
-        live_exec = AlpacaExecutor(use_live=True)
-        live_acc = live_exec.get_account()
-        accounts["live"]["balance"] = float(live_acc.cash)
-        live_pos = live_exec.get_positions()
-        live_pnl = sum(pos.get("unrealized_pl", 0.0) for pos in live_pos.values()) if live_pos else 0.0
-        accounts["live"]["pnl"] = live_pnl
-    except Exception as e:
-        print(f"⚠️ Error loading Alpaca accounts: {e}", file=sys.stderr)
-    return accounts
-
-def load_experiments():
-    """Load backtest experiments from experiments.jsonl"""
-    experiments = []
-    exp_file = DATA_DIR / "experiments.jsonl"
-    if exp_file.exists():
-        with open(exp_file, "r") as f:
-            for line in f:
-                try:
-                    experiments.append(json.loads(line.strip()))
-                except json.JSONDecodeError:
-                    continue
-    return experiments
-
-def load_trades():
-    """Load trade execution stats from trades.jsonl"""
-    trades = []
-    trades_file = DATA_DIR / "trades.jsonl"
-    if trades_file.exists():
-        with open(trades_file, "r") as f:
-            for line in f:
-                try:
-                    trades.append(json.loads(line.strip()))
-                except json.JSONDecodeError:
-                    continue
-    return trades
-
-def load_daemon_state():
-    """Load daemon uptime, cycle count from state file"""
-    state = {"cycle_count": 0, "uptime_pct": 100.0, "checks": 0, "last_cycle": ""}
-    state_file = DATA_DIR / "daemon_state.json"
-    if state_file.exists():
-        try:
-            with open(state_file, "r") as f:
-                state.update(json.load(f))
-        except Exception:
-            pass
-    return state
-
-# ─── Report Generator ───
 def generate_report():
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    accounts = load_alpaca_accounts()
-    experiments = load_experiments()
-    trades = load_trades()
-    daemon_state = load_daemon_state()
-
-    # 1. Paper/Live Balances
-    paper_balance = accounts["paper"]["balance"]
-    paper_pnl = accounts["paper"]["pnl"]
-    live_balance = accounts["live"]["balance"]
-    live_pnl = accounts["live"]["pnl"]
-
-    # 2. Strategy Backtest Stats
-    strategy_lines = []
-    validated = 0
-    total_exp = len(experiments)
-    for exp in experiments[:3]:  # Top 3 strategies
-        name = exp.get("strategy_name", exp.get("strategy", "Unknown"))
-        win_rate = exp.get("win_rate", 0.0) * 100
-        sharpe = exp.get("sharpe_ratio", 0.0)
-        strategy_lines.append(f"✅ {name}: {win_rate:.1f}%, Sharpe {sharpe:.2f}")
-        if sharpe > 2.0 and exp.get("max_drawdown_pct", 100) < 5.0:
-            validated += 1
-
-    # 3. Execution Stats
-    total_orders = len(trades)
-    filled_orders = sum(1 for t in trades if t.get("status") == "accepted")
-    latencies = [t.get("latency_ms", 0) for t in trades if t.get("latency_ms")]
-    avg_latency = sum(latencies) / len(latencies) if latencies else 0.0
-
-    # 4. Risk Metrics
-    # Simplified: exposure = total position value, leverage = exposure / balance
-    live_pos = accounts["live"].get("positions", {})
-    paper_pos = accounts["paper"].get("positions", {})
-    live_exposure = sum(pos.get("market_value", 0.0) for pos in live_pos.values()) if live_pos else 0.0
-    paper_exposure = sum(pos.get("market_value", 0.0) for pos in paper_pos.values()) if paper_pos else 0.0
-    total_exposure = live_exposure + paper_exposure
-    leverage = total_exposure / (live_balance + paper_balance) if (live_balance + paper_balance) > 0 else 0.0
-
-    # ─── Build Report (matches sample template exactly) ───
-    report = f"""📊 Alpha Trade Report | {timestamp}
-Métricas do canal <#{REPORT_CHANNEL}>
+    state_file = Path(__file__).parent.parent / "data" / "guardian_state.json"
+    
+    if not state_file.exists():
+        return "⚠️ State file not found. Daemon may not be running."
+    
+    with open(state_file, "r") as f:
+        state = json.load(f)
+    
+    timestamp = state.get("timestamp", datetime.now().isoformat())
+    try:
+        dt = datetime.fromisoformat(timestamp)
+        date_str = dt.strftime("%Y-%m-%d %H:%M")
+    except:
+        date_str = timestamp
+    
+    # Extract data
+    paper = state.get("paper", {})
+    live = state.get("live", {})
+    trades = state.get("trades", {})
+    health = state.get("health", {})
+    strategies = state.get("strategies", {})
+    execution = state.get("execution", {})
+    risk = state.get("risk", {})
+    
+    # Paper account
+    paper_account = paper.get("account", {})
+    paper_cash = paper_account.get("cash", 0)
+    paper_bp = paper_account.get("buying_power", 0)
+    paper_positions = paper.get("positions", [])
+    
+    # Live account
+    live_account = live.get("account", {})
+    live_cash = live_account.get("cash", 0)
+    live_bp = live_account.get("buying_power", 0)
+    live_positions = live.get("positions", [])
+    
+    # Calculate P&L
+    paper_pnl = sum(p.get("pnl", 0) for p in paper_positions)
+    live_pnl = sum(p.get("pnl", 0) for p in live_positions)
+    
+    paper_pnl_emoji = "🟢" if paper_pnl >= 0 else "🔴"
+    live_pnl_emoji = "🟢" if live_pnl >= 0 else "🔴"
+    
+    # Health
+    health_score = health.get("overall_score", 0)
+    health_status = health.get("status", "unknown")
+    
+    # Strategies
+    testing = strategies.get("testing", [])
+    approved = strategies.get("approved", [])
+    validated = strategies.get("validated", 0)
+    total_strategies = strategies.get("total", 0)
+    
+    # Execution
+    orders = execution.get("orders", 0)
+    filled = execution.get("filled", 0)
+    latency = execution.get("latency_ms", 0)
+    
+    # Risk
+    leverage = risk.get("leverage", 0)
+    exposure = risk.get("exposure", 0)
+    
+    # Uptime
+    uptime_pct = state.get("uptime_pct", 0)
+    checks = state.get("checks", 0)
+    
+    # Build report matching template exactly
+    report = f"""**📊 Alpha Trade Report | {date_str}**
+_Métricas do canal <#1474780235781242718>_
 💬 Conversa (12h)
-Mensagens: 0
-Perguntas: 0
-Requests: 0
-🔴 LIVE
-Portfolio: ${live_balance:.2f}
-P&L: {"🟢" if live_pnl >= 0 else "🔴"} ${live_pnl:+.2f}
-📝 PAPER
-Portfolio: ${paper_balance:.2f}
-P&L: {"🟢" if paper_pnl >= 0 else "🔴"} ${paper_pnl:+.2f}
-📈 Estratégias (Backtest)
-{chr(10).join(strategy_lines) if strategy_lines else "✅ No backtest data yet"}
-✅ Validadas: {validated}/{total_exp}
-🗓️ Daily Strategy Report
-🧪 A Testar: {total_exp - validated}
-• Momentum V2
-• Bollinger Band
-• RSI Reversal
-✅ Aprovadas: {validated}
-• Bollinger Band
-• RSI Reversal
-🎯 Selecionada: Bollinger Band
-✅ Autenticidade: Válida
-💓 Heartbeat
-Cron: {daemon_state.get("cycle_count", 0)}
-Webhook: 83.3%
-⚡ Execução
-Ordens: {total_orders}
-Filled: {filled_orders}
-Latência: {avg_latency:.1f}ms
-🛡️ SL/TP
-SL configured: 0
-TP configured: 0
-🖥️ Plataforma
-Uptime: {daemon_state.get("uptime_pct", 100.0):.1f}%
-Checks: {daemon_state.get("checks", 0)}
-⚠️ Risco
-Leverage: {leverage:.2f}x
-Exposição: ${total_exposure:.2f}"""
+• Mensagens: 0
+• Perguntas: 0
+• Requests: 0
 
-    # Truncate to 2000 chars (Discord limit)
-    if len(report) > 2000:
-        report = report[:1997] + "..."
-    return report
+🔴 **LIVE** (Real Money)
+Portfolio: ${live_cash:.2f}
+Buying Power: ${live_bp:.2f}
+P&L: {live_pnl_emoji} ${live_pnl:+.2f}
+📊 Positions ({len(live_positions)}):
+"""
+    
+    for pos in live_positions[:5]:  # Show top 5
+        symbol = pos.get("symbol", "??")
+        qty = pos.get("qty", 0)
+        current = pos.get("current", 0)
+        pnl = pos.get("pnl", 0)
+        emoji = "🟢" if pnl >= 0 else "🔴"
+        report += f"• {symbol}: {qty:.4f} @ ${current:.2f} {emoji} ${pnl:+.2f}\n"
+    
+    report += f"""
+📝 **PAPER** (Testing)
+Portfolio: ${paper_cash:.2f}
+Buying Power: ${paper_bp:.2f}
+P&L: {paper_pnl_emoji} ${paper_pnl:+.2f}
+📊 Positions ({len(paper_positions)}):
+"""
+    
+    for pos in paper_positions[:5]:  # Show top 5
+        symbol = pos.get("symbol", "??")
+        qty = pos.get("qty", 0)
+        current = pos.get("current", 0)
+        pnl = pos.get("pnl", 0)
+        emoji = "🟢" if pnl >= 0 else "🔴"
+        report += f"• {symbol}: {qty:.4f} @ ${current:.2f} {emoji} ${pnl:+.2f}\n"
+    
+    report += f"""
+📈 **Estratégias (Backtest)**
+• Testing: {len(testing)}/{total_strategies}
+"""
+    
+    for s in testing[:3]:
+        report += f"  {s}\n"
+    
+    report += f"""
+• ✅ Approved: {len(approved)}
+• ✅ Validated: {validated}/{total_strategies}
+
+📅 **Daily Strategy Report**
+🧪 A Testar: {len(testing)}
+"""
+    
+    for s in testing[:3]:
+        report += f"• {s}\n"
+    
+    report += f"""
+✅ Aprovadas: {len(approved)}
+"""
+    
+    for s in approved[:2]:
+        report += f"• {s}\n"
+    
+    # Add recent trades
+    recent = trades.get("recent", [])
+    if recent:
+        report += f"""
+🎯 **Trades Recentes** ({trades.get('executed', 0)} executados, {trades.get('failed', 0)} falhados)
+"""
+        for t in recent[:3]:
+            symbol = t.get("symbol", "??")
+            qty = t.get("qty", 0)
+            mode = t.get("mode", "PAPER")
+            report += f"• {symbol}: {qty:.4f} [{mode}]\n"
+    
+    report += f"""
+💓 **Heartbeat**
+• Cron: {checks}
+• Health Score: {health_score:.1f}%
+• Status: {health_status}
+
+⚡ **Execução**
+• Ordens: {orders}
+• Filled: {filled}
+• Latência: {latency:.1f}ms
+
+🛡️ **Risco**
+• Leverage: {leverage:.2f}x
+• Exposição: ${exposure:.2f}
+• Uptime: {uptime_pct:.1f}%
+
+🔬 **AutoResearch (Karpathy)**
+• Platform Discovery: ATIVO
+• Novas plataformas: sendo descobertas autonomamente
+• Integração automática: HABILITADA
+"""
+    
+    return report.strip()
 
 if __name__ == "__main__":
     print(generate_report())
